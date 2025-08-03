@@ -71,10 +71,15 @@
 
 #back-button {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: 10px;
+  right: 10px;
   z-index: 10;
   padding: 10px 10px;
+  background-color: #666;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
 }
 
 ruby {
@@ -137,7 +142,7 @@ input[type="radio"] {
 
 #choice-buttons {
   position: absolute;
-  bottom: 60px;
+  bottom: 70px;
   right: 20px;
   display: flex;
   flex-direction: column;
@@ -166,7 +171,7 @@ input[type="radio"] {
 
 #next-button {
   padding: 8px 15px;
-  font-size: 14px;
+  font-size: 18px;
   font-weight: bold;
   background-color: #e86c00;
   color: white;
@@ -189,11 +194,73 @@ input[type="radio"] {
   width: 35px;
   text-align: center;
 }
+
+#result-message {
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.result-title {
+  font-size: 28px;
+  margin-bottom: 20px;
+  color: #e86c00;
+}
+
+#score-display {
+  font-size: 60px;
+  font-weight: bold;
+  color: #333;
+  margin: 20px 0;
+}
+
+#score-number {
+  font-size: 60px;
+}
+
+.score-unit {
+  font-size: 28px;
+  margin-left: 8px;
+  color: #444;
+}
+
+#result-comment {
+  font-size: 22px;
+  color: #555;
+  margin-top: 20px;
+  min-height: 2em;
+}
+
+#restart-button {
+  display: block;
+  margin: 50px auto 0;
+  padding: 12px 24px;
+  font-size: 18px;
+  background-color: #888;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#result-wrapper {
+  border: 4px solid orange;
+  border-radius: 20px;
+  padding: 30px;
+  width: 400px;
+  height: 450px;
+  margin: 60px auto;
+  background-color: #fff8f0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
   </style>
 </head>
 <body>
   <div id="game-container">
   </div>
+  <canvas id="confetti-canvas" style="position:fixed; top:0; left:0; pointer-events:none; z-index:999;"></canvas>
 
 <script>
 
@@ -423,16 +490,124 @@ function nextQuestion() {
 }
 
 function showResultScreen() {
+  const modeLabel = {
+    lower: "とどうふけん　なまえクイズ",
+    upper: "都道府県　名前クイズ",
+    map: "都道府県　場所クイズ"
+  };
   const container = document.getElementById("game-container");
+
+  // リザルト画面の初期表示（タイトルとスロット数字用エリア）
   container.innerHTML = `
+  <div id="mode-banner">${modeLabel[quizMode]}</div>
+  <div id="result-wrapper">
     <div id="result-message">
-      クイズ終了！<br>
-      正解数：${correctCount}問
+      <div class="result-title">あなたの成績</div>
+      <div id="score-display"><span id="score-number">000</span> <span class="score-unit">てん</span></div>
+      <div id="result-comment"></div>
     </div>
-    <button onclick="showTitleScreen()">タイトルにもどる</button>
+    <button id="restart-button" onclick="showTitleScreen()">さいしょにもどる</button>
+  </div>
   `;
+
+  // スロット風数字表示
+  const scoreElement = document.getElementById("score-number");
+  const finalScore = Math.floor((correctCount / questionCount) * 100);
+  let current = 0;
+  const duration = 1000;
+  const steps = 30;
+  const interval = duration / steps;
+  const increment = Math.ceil(finalScore / steps);
+
+  const slotInterval = setInterval(() => {
+    current += increment;
+    if (current >= finalScore) {
+      current = finalScore;
+      clearInterval(slotInterval);
+
+      // コメント表示
+      const comment = getCommentForScore(finalScore);
+      document.getElementById("result-comment").textContent = comment;
+      if (finalScore === 100) {
+        launchConfetti();
+      }
+    }
+    scoreElement.textContent = current.toString().padStart(3, "0");
+  }, interval);
+
 }
 
+// スコアに応じたコメント
+function getCommentForScore(score) {
+  if (score < 50) {
+    return "次は　もっと高得点をめざそう！";
+  } else if (score <= 80) {
+    return "この調子で　がんばろう！";
+  } else if (score < 100) {
+    return "おしい！　もうちょっとで満点だ！";
+  } else {
+    return "おめでとう！全問正解だよ！";
+  }
+}
+
+function launchConfetti() {
+  const canvas = document.getElementById('confetti-canvas');
+  const ctx = canvas.getContext('2d');
+
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const confettiCount = 150;
+  const confetti = [];
+
+  for (let i = 0; i < confettiCount; i++) {
+    confetti.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height - canvas.height,
+      r: Math.random() * 6 + 4,
+      d: Math.random() * confettiCount,
+      color: `hsl(${Math.random() * 360}, 70%, 60%)`,
+      tilt: Math.random() * 10 - 10,
+      tiltAngleIncremental: Math.random() * 0.07 + 0.05,
+      tiltAngle: 0
+    });
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    confetti.forEach((c, i) => {
+      ctx.beginPath();
+      ctx.lineWidth = c.r;
+      ctx.strokeStyle = c.color;
+      ctx.moveTo(c.x + c.tilt + c.r / 2, c.y);
+      ctx.lineTo(c.x + c.tilt, c.y + c.tilt + c.r / 2);
+      ctx.stroke();
+    });
+    update();
+  }
+
+  function update() {
+    confetti.forEach((c, i) => {
+      c.tiltAngle += c.tiltAngleIncremental;
+      c.y += (Math.cos(c.d) + 3 + c.r / 2) / 2;
+      c.x += Math.sin(0);
+      c.tilt = Math.sin(c.tiltAngle - i) * 15;
+    });
+  }
+
+  let animationId;
+  function loop() {
+    draw();
+    animationId = requestAnimationFrame(loop);
+  }
+
+  loop();
+
+  setTimeout(() => {
+    cancelAnimationFrame(animationId);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, 3000);
+}
 
   function startUpperGradeQuiz() {
     document.getElementById("game-container").innerHTML =
