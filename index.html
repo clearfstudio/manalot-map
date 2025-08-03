@@ -18,7 +18,7 @@
 #game-container {
   position: relative;
   width: 90vw;
-  height: 90vh;
+  height: 87vh;
   margin: auto;
   border-radius: 20px;
   overflow: hidden;
@@ -137,7 +137,7 @@ input[type="radio"] {
 
 #choice-buttons {
   position: absolute;
-  bottom: 30px;
+  bottom: 60px;
   right: 20px;
   display: flex;
   flex-direction: column;
@@ -150,12 +150,45 @@ input[type="radio"] {
   padding: 10px 20px;
   border: 2px solid #e86c00;
   border-radius: 8px;
+  width: 200px;
   background-color: white;
   color: #e86c00;
   font-weight: bold;
   cursor: pointer;
 }
 
+#next-button-area {
+  position: absolute;
+  bottom: 15px;
+  right: 20px;
+  z-index: 20;
+}
+
+#next-button {
+  padding: 8px 15px;
+  font-size: 14px;
+  font-weight: bold;
+  background-color: #e86c00;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.choice-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* マークとボタンの間隔 */
+}
+
+.result-mark {
+  font-size: 32px;
+  font-weight: bold;
+  color: #333;
+  width: 35px;
+  text-align: center;
+}
   </style>
 </head>
 <body>
@@ -306,35 +339,100 @@ function startLowerGradeQuiz() {
   const container = document.getElementById("game-container");
   const currentPref = questionList[0]; // 出題中の都道府県
 
-    const modeLabel = {
-        lower: "とどうふけん　なまえクイズ",
-        upper: "都道府県　名前クイズ",
-        map: "都道府県　場所クイズ"
-    };
+  const modeLabel = {
+    lower: "とどうふけん　なまえクイズ",
+    upper: "都道府県　名前クイズ",
+    map: "都道府県　場所クイズ"
+  };
 
+  // 正解 + ダミー3つを選択肢として用意
+  const choices = [currentPref];
+  const others = shuffle(prefectures.filter(p => p.id !== currentPref.id)).slice(0, 3);
+  choices.push(...others);
+
+  const shuffledChoices = shuffle(choices);
+
+  // innerHTML 出力（選択肢ボタン生成）
   container.innerHTML = `
-    <!-- モード表示と戻るボタン -->
     <div id="mode-banner">${modeLabel[quizMode]}</div>
     <button id="back-button" onclick="showTitleScreen()">もどる</button>
 
-    <!-- 日本地図線画（最前面） -->
     <img id="japan-map" src="images/japan.png" alt="日本地図" />
-
-    <!-- オレンジの県シルエット（背景） -->
     <img id="highlight-pref" src="images/${currentPref.id}-2.png" alt="出題県" />
 
-    <!-- 問題文 -->
-    <div id="question-text">この　<ruby>都道府県<rt>とどうふけん</rt></ruby>の<br><ruby>名前<rt>なまえ</rt></ruby>はなに？</div>
+    <div id="question-text">この　<ruby>都道府県<rt>とどうふけん</rt></ruby>の<br><ruby>名前<rt>なまえ</rt></ruby>は？</div>
 
-    <!-- 選択肢ボタン4つ（仮表示） -->
-    <div id="choice-buttons">
-      <button>テスト１</button>
-      <button>テスト２</button>
-      <button>テスト３</button>
-      <button>テスト４</button>
+<div id="choice-buttons">
+  ${shuffledChoices.map(pref => `
+    <div class="choice-wrapper">
+      <div class="result-mark"></div> <!-- 先に表示 -->
+      <button onclick="checkAnswer(${pref.id}, this)">
+        <ruby>${pref.name}<rt>${pref.yomi}</rt></ruby>
+      </button>
     </div>
+  `).join('')}
+</div>
+
+    <div id="next-button-area"></div>
   `;
 }
+
+function checkAnswer(selectedId, clickedButton) {
+  const correctId = questionList[0].id;
+  const wrappers = document.querySelectorAll('.choice-wrapper');
+
+  wrappers.forEach(wrapper => {
+    const btn = wrapper.querySelector('button');
+    const mark = wrapper.querySelector('.result-mark');
+    const isCorrect = btn.innerText.includes(prefectures.find(p => p.id === correctId).name);
+
+    if (isCorrect) {
+      btn.style.backgroundColor = "#c8f7c5";
+      btn.style.borderColor = "green";
+      mark.textContent = "⭕";
+    } else if (btn === clickedButton) {
+      btn.style.backgroundColor = "#f8cccc";
+      btn.style.borderColor = "red";
+      mark.textContent = "❌";
+    }
+
+    btn.disabled = true;
+  });
+
+  if (selectedId === correctId) {
+    correctCount++;
+  }
+
+  // つぎへボタン表示
+  document.getElementById("next-button-area").innerHTML = `
+    <button id="next-button" onclick="nextQuestion()">つぎへ →</button>
+  `;
+}
+
+function nextQuestion() {
+  // 今の問題をリストから削除
+  questionList.shift();
+
+  if (questionList.length === 0) {
+    // 成績発表（仮）
+    showResultScreen();
+  } else {
+    // 次の問題を表示
+    startLowerGradeQuiz();
+  }
+}
+
+function showResultScreen() {
+  const container = document.getElementById("game-container");
+  container.innerHTML = `
+    <div id="result-message">
+      クイズ終了！<br>
+      正解数：${correctCount}問
+    </div>
+    <button onclick="showTitleScreen()">タイトルにもどる</button>
+  `;
+}
+
 
   function startUpperGradeQuiz() {
     document.getElementById("game-container").innerHTML =
