@@ -225,7 +225,7 @@ input[type="radio"] {
 }
 
 #result-comment {
-  font-size: 22px;
+  font-size: 24px;
   color: #555;
   margin-top: 20px;
   min-height: 2em;
@@ -253,6 +253,60 @@ input[type="radio"] {
   background-color: #fff8f0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+#input-area {
+  text-align: center;
+  position: absolute;
+  right: 20px;
+  top: 180px;
+  z-index: 100;
+}
+
+#text-answer {
+  width: 200px;
+  font-size: 24px;
+  padding: 12px;
+  border: 2px solid #ccc;
+  border-radius: 8px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+  outline: none;
+  box-sizing: border-box;
+}
+
+#check-button-area {
+  margin-top: 5px;
+  text-align: right;
+}
+
+#check-button {
+  padding: 12px 24px;
+  font-size: 18px;
+  background-color: #3399ff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 16px;
+}
+
+#answer-result {
+  font-size: 26px;
+  font-weight: bold;
+  margin-bottom: 10px;
+  height: 3em;
+  color: red;
+}
+
+#question-count {
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 15px;
+  text-align: left;
+  color: #333;
 }
 
   </style>
@@ -318,6 +372,7 @@ const prefectures = [
   let quizMode = ""; //選択モード
   let questionList = []; //生成された問題リスト
   let correctCount = 0; //正解数
+  let currentQuestionNumber = 1; //今何問目
 
   window.addEventListener("DOMContentLoaded", () => {
     showTitleScreen();
@@ -328,6 +383,7 @@ const prefectures = [
     quizMode = "";
     questionList = [];
     correctCount = 0;
+    currentQuestionNumber = 1;
     const container = document.getElementById("game-container");
 
     container.innerHTML = `
@@ -427,7 +483,8 @@ function startLowerGradeQuiz() {
     <img id="japan-map" src="images/japan.png" alt="日本地図" />
     <img id="highlight-pref" src="images/${currentPref.id}-2.png" alt="出題県" />
 
-    <div id="question-text">この　<ruby>都道府県<rt>とどうふけん</rt></ruby>の<br><ruby>名前<rt>なまえ</rt></ruby>は？</div>
+    <div id="question-text"><div id="question-count">もんだい ${currentQuestionNumber} / ${questionCount}</div>
+この　<ruby>都道府県<rt>とどうふけん</rt></ruby>の<br><ruby>名前<rt>なまえ</rt></ruby>は？</div>
 
 <div id="choice-buttons">
   ${shuffledChoices.map(pref => `
@@ -479,13 +536,19 @@ function checkAnswer(selectedId, clickedButton) {
 function nextQuestion() {
   // 今の問題をリストから削除
   questionList.shift();
+  currentQuestionNumber++;
 
   if (questionList.length === 0) {
     // 成績発表（仮）
     showResultScreen();
   } else {
-    // 次の問題を表示
-    startLowerGradeQuiz();
+    if (quizMode === "lower") {
+      startLowerGradeQuiz();
+    } else if (quizMode === "upper") {
+      startUpperGradeQuiz();
+    } else if (quizMode === "map") {
+      startMapQuiz(); // もし地図クイズモードがあるなら
+    }
   }
 }
 
@@ -502,7 +565,7 @@ function showResultScreen() {
   <div id="mode-banner">${modeLabel[quizMode]}</div>
   <div id="result-wrapper">
     <div id="result-message">
-      <div class="result-title">あなたの成績</div>
+      <div class="result-title">あなたの<ruby>成績<rt>せいせき</rt></ruby></div>
       <div id="score-display"><span id="score-number">000</span> <span class="score-unit">てん</span></div>
       <div id="result-comment"></div>
     </div>
@@ -527,7 +590,7 @@ function showResultScreen() {
 
       // コメント表示
       const comment = getCommentForScore(finalScore);
-      document.getElementById("result-comment").textContent = comment;
+      document.getElementById("result-comment").innerHTML = comment;
       if (finalScore === 100) {
         launchConfetti();
       }
@@ -540,13 +603,13 @@ function showResultScreen() {
 // スコアに応じたコメント
 function getCommentForScore(score) {
   if (score < 50) {
-    return "次は　もっと高得点をめざそう！";
+    return `つぎは　もっと<ruby style="font-size: 24px;">高得点<rt>こうとくてん</rt></ruby>をめざそう！`;
   } else if (score <= 80) {
-    return "この調子で　がんばろう！";
+    return `この<ruby style="font-size: 24px;">調子<rt>ちょうし</rt></ruby>で　がんばろう！`;
   } else if (score < 100) {
-    return "おしい！　もうちょっとで満点だ！";
+    return `おしい！　もうちょっとで<ruby style="font-size: 24px;">満点<rt>まんてん</rt></ruby>だ！`;
   } else {
-    return "おめでとう！全問正解だよ！";
+    return `おめでとう！　<ruby style="font-size: 24px;">全問正解<rt>ぜんもんせいかい</rt></ruby>だよ！`;
   }
 }
 
@@ -609,10 +672,77 @@ function launchConfetti() {
   }, 3000);
 }
 
-  function startUpperGradeQuiz() {
-    document.getElementById("game-container").innerHTML =
-      `<h2 style="text-align: center; padding-top: 40%;">４年生以上クイズ（${questionCount}もん）スタート！</h2>`;
+function startUpperGradeQuiz() {
+  const container = document.getElementById("game-container");
+  const currentPref = questionList[0]; // 出題中の都道府県
+
+  const modeLabel = {
+    lower: "とどうふけん　なまえクイズ",
+    upper: "都道府県　名前クイズ",
+    map: "都道府県　場所クイズ"
+  };
+
+  container.innerHTML = `
+    <div id="mode-banner">${modeLabel[quizMode]}</div>
+    <button id="back-button" onclick="showTitleScreen()">もどる</button>
+
+    <img id="japan-map" src="images/japan.png" alt="日本地図" />
+    <img id="highlight-pref" src="images/${currentPref.id}-2.png" alt="出題県" />
+
+    <div id="question-text"><div id="question-count">問題 ${currentQuestionNumber} / ${questionCount}</div>この都道府県の<br>名前は？<br><br>漢字で正しく<br>入力しよう</div>
+
+    <div id="input-area">
+      <div id="answer-result"></div>
+      <input type="text" id="text-answer" placeholder="ここに入力" autocomplete="off" />
+    <div id="check-button-area">
+      <button id="check-button" onclick="checkTextAnswer()">こたえあわせ</button>
+    </div>
+    </div>
+
+    <div id="next-button-area"></div>
+  `;
+
+    const input = document.getElementById("text-answer");
+  if (input) {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        checkTextAnswer();
+      }
+    });
   }
+  
+}
+
+
+function checkTextAnswer() {
+  const input = document.getElementById("text-answer");
+  const userAnswer = input.value.trim();
+  const correctPref = questionList[0];
+
+  // エスケープ処理
+  const safeUserAnswer = userAnswer.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const resultSymbol = (safeUserAnswer === correctPref.name)
+  ? `⭕ 正解！`
+  : `❌ 残念！`;
+
+
+  // ⭐ 表示だけ書き換え
+  const resultDiv = document.getElementById("answer-result");
+  resultDiv.innerHTML = `${resultSymbol}<br>答え：${correctPref.name}`;
+
+  if (safeUserAnswer === correctPref.name) {
+    correctCount++;
+  }
+
+  input.disabled = true;
+  document.getElementById("check-button").disabled = true;
+
+  document.getElementById("next-button-area").innerHTML = `
+    <button id="next-button" onclick="nextQuestion()">つぎへ →</button>
+  `;
+}
 
   function startMapGame() {
     document.getElementById("game-container").innerHTML =
