@@ -449,7 +449,7 @@ const prefectures = [
   let currentQuestionNumber = 1; //今何問目
   let selectedPrefId = null; // 場所モードで使用する変数
   const maskImages = {};          // 当たり判定用に読み込む白シルエット画像（id -> Image）
-  let hitCanvas = null, hitCtx = null;
+  let hitMapCanvas = null, hitMapCtx = null;
   const imgCache = {};
 
 function preloadImages(urls, onProgress) {
@@ -476,6 +476,49 @@ function showLoadingOverlay() {
   `;
 }
 
+async function buildHitMap() {
+  // 地図と同じピクセルサイズ
+  const mapImg = imgCache["images/japan.png"]; // 事前プリロード済み想定
+  const w = mapImg.naturalWidth || mapImg.width;
+  const h = mapImg.naturalHeight || mapImg.height;
+
+  hitMapCanvas = document.createElement('canvas');
+  hitMapCanvas.width = w;
+  hitMapCanvas.height = h;
+  hitMapCtx = hitMapCanvas.getContext('2d');
+
+  // 作業用キャンバス（県ごとに色付けして転写）
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const tctx = tmp.getContext('2d');
+
+  for (const p of prefectures) {
+    tctx.clearRect(0, 0, w, h);
+    // 白シルエットを原寸で描画
+    const mask = imgCache[`images/${p.id}-1.png`];
+    tctx.drawImage(mask, 0, 0, w, h);
+
+    // 白(不透明)部分だけR=p.idに塗り替える
+    const imgData = tctx.getImageData(0, 0, w, h);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i+3] > 0) { // α>0 なら県の内部
+        d[i] = p.id;    // R に県IDを格納 (1..47)
+        d[i+1] = 0;
+        d[i+2] = 0;
+        d[i+3] = 255;   // 不透明
+      } else {
+        // 完全透明に（背景=0判定用）
+        d[i] = d[i+1] = d[i+2] = 0;
+        d[i+3] = 0;
+      }
+    }
+    tctx.putImageData(imgData, 0, 0);
+
+    // 本体に重ね描き（県ごとに上書き）
+    hitMapCtx.drawImage(tmp, 0, 0);
+  }
+}
 
 window.addEventListener("DOMContentLoaded", async () => {
   // 1) ローディングUI
@@ -500,6 +543,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     // マスク用キャッシュへ（白シルエット）
     prefectures.forEach(p => { maskImages[p.id] = imgCache[`images/${p.id}-1.png`]; });
 
+    if (txt()) txt().textContent = "地図の当たり判定を準備中…";
+    await buildHitMap();
+
     // 3) プリロード完了 → タイトルへ
     showTitleScreen();
   } catch (e) {
@@ -515,7 +561,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     correctCount = 0;
     currentQuestionNumber = 1;
     selectedPrefId = null;
-    hitCanvas = null, hitCtx = null;
     const container = document.getElementById("game-container");
 
     container.innerHTML = `
@@ -846,7 +891,6 @@ function startUpperGradeQuiz() {
   
 }
 
-
 function checkTextAnswer() {
   const input = document.getElementById("text-answer");
   const userAnswer = input.value.trim();
@@ -922,72 +966,50 @@ function startMapGame() {
 
     <div id="next-button-area"></div>
   `;
-    // 1) 白シルエット画像をキャッシュ
-  prefectures.forEach(p => {
-    if (!maskImages[p.id]) {
-      const img = new Image();
-      img.src = `images/${p.id}-1.png`;
-      maskImages[p.id] = img;
-    }
-  });
 
-  // 2) オフスクリーンCanvasを用意（線画画像サイズに合わせる）
-  const mapImg = document.getElementById("japan-map");
-  hitCanvas = document.createElement('canvas');
-  hitCtx = hitCanvas.getContext('2d');
-  // naturalWidth/Height は読み込み後に入る（未読込なら一旦 rect から推定してもOK）
-  const setCanvasSize = () => {
-    hitCanvas.width  = mapImg.naturalWidth  || mapImg.getBoundingClientRect().width;
-    hitCanvas.height = mapImg.naturalHeight || mapImg.getBoundingClientRect().height;
-  };
-  if (mapImg.complete) setCanvasSize(); else mapImg.onload = setCanvasSize;
+    container.removeEventListener('click', onMapClick);
+    container.addEventListener('click', onMapClick, { passive: true });
 
-  // 3) クリックで座標→県IDを特定
-  container.addEventListener('click', onMapClick);
 }
 
 function onMapClick(e) {
   const mapImg = document.getElementById("japan-map");
   const rect = mapImg.getBoundingClientRect();
+  if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
 
-  // 画像範囲外のクリックは無視
-  if (e.clientX < rect.left || e.clientX > rect.right ||
-      e.clientY < rect.top  || e.clientY > rect.bottom) return;
-
-  // 表示座標 -> 画像ピクセル座標に変換
-  const scaleX = (mapImg.naturalWidth  || rect.width)  / rect.width;
+  const scaleX = (mapImg.naturalWidth || rect.width) / rect.width;
   const scaleY = (mapImg.naturalHeight || rect.height) / rect.height;
   const x = Math.floor((e.clientX - rect.left) * scaleX);
   const y = Math.floor((e.clientY - rect.top)  * scaleY);
 
-  // すべての県の白シルエットで、クリック点のアルファをチェック
-  // ※白シルエットは透過背景なので、当たりは alpha>0 で判定できる
-  let hitId = null;
-  for (const p of prefectures) {
-    const img = maskImages[p.id];
-    if (!img || !hitCtx || !hitCanvas.width) continue;
-
-    // クリアして、その県の画像を原寸で描画
-    hitCtx.clearRect(0, 0, hitCanvas.width, hitCanvas.height);
-    hitCtx.drawImage(img, 0, 0, hitCanvas.width, hitCanvas.height);
-
-    const alpha = hitCtx.getImageData(x, y, 1, 1).data[3];
-    if (alpha > 0) { // 透明でない = その県の形の中
-      hitId = p.id;
-      break;
-    }
-  }
-
-  if (hitId != null) {
-    selectPref(hitId); // いつもの選択処理（1枚だけオレンジ化）
+  if (!hitMapCtx) return;
+  const pixel = hitMapCtx.getImageData(x, y, 1, 1).data;
+  const id = pixel[0]; // ← R に県IDが入ってる
+  if (id > 0) {
+    selectPref(id);
+  } else {
+    // 近傍を少し探す（タップゆらぎ救済：半径3〜5px）
+    const near = findNearId(x, y, 4); // 半径4の近傍探索
+    if (near) selectPref(near);
   }
 }
 
-// 県をタップしたとき：前の選択を白に戻し、今回タップをオレンジに
+function findNearId(x, y, r=4) {
+  if (!hitMapCtx) return null;
+  for (let dy=-r; dy<=r; dy++) {
+    for (let dx=-r; dx<=r; dx++) {
+      const a = hitMapCtx.getImageData(x+dx, y+dy, 1, 1).data[0];
+      if (a > 0) return a;
+    }
+  }
+  return null;
+}
+
 function selectPref(id) {
   console.log('tap:', id);
-  // 以前の選択があれば白に戻す
-  if (selectedPrefId !== null) {
+
+  // 以前の選択を白に戻す
+  if (selectedPrefId !== null && selectedPrefId !== id) {
     const prev = document.getElementById(`pref-img-${selectedPrefId}`);
     if (prev) prev.src = `images/${selectedPrefId}-1.png`;
   }
@@ -999,6 +1021,7 @@ function selectPref(id) {
     selectedPrefId = id;
   }
 }
+
 
 // 正誤判定（UIは次のステップで作り込み。今は枠だけ用意）
 function checkMapAnswer() {
