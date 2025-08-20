@@ -983,6 +983,10 @@ function startMapGame() {
 
   // 初期選択をリセット
   selectedPrefId = null;
+  prefectures.forEach(p => {
+    const img = document.getElementById(`pref-img-${p.id}`);
+    if (img) img.src = `images/${p.id}-1.png`;
+  });
 
   container.innerHTML = `
     <div id="mode-banner">${modeLabel[quizMode]}</div>
