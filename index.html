@@ -117,6 +117,7 @@ input[type="radio"] {
   transform: translateX(-50%);    /* 画像の幅の半分だけ左にずらす */
   height: 100%;
   z-index: 5;
+  pointer-events: none;
 }
 
 #highlight-pref {
@@ -309,6 +310,79 @@ input[type="radio"] {
   color: #333;
 }
 
+/* 47枚の白シルエット層：線画の下に敷く */
+#silhouette-layer {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 100%;
+  width: auto;
+  z-index: 2; /* 地図線画より下 */
+}
+
+/* 各シルエット画像（クリック対象） */
+.pref-sil {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 100%;
+  width: auto;
+  z-index: 2;
+  pointer-events: none;
+  cursor: pointer;
+}
+
+#confirm-button {
+  position: absolute;
+  bottom: 30px;
+  right: 20px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background-color: #e86c00;
+  color: #fff;
+  border: none;
+  font-size: 22px;
+  font-weight: bold;
+  box-shadow: 2px 2px 8px rgba(0,0,0,0.25);
+  cursor: pointer;
+  z-index: 20;
+}
+
+#confirm-button:active {
+  transform: translateX(0) scale(0.98);
+}
+
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 999;
+  font-weight: bold;
+}
+#loading-bar {
+  width: 60%;
+  max-width: 400px;
+  height: 10px;
+  background: #eee;
+  border-radius: 999px;
+  overflow: hidden;
+}
+#loading-bar > div {
+  height: 100%;
+  width: 0%;
+  background: #e86c00;
+  transition: width 0.1s linear;
+}
+#loading-text { color: #333; }
+
   </style>
 </head>
 <body>
@@ -373,10 +447,66 @@ const prefectures = [
   let questionList = []; //生成された問題リスト
   let correctCount = 0; //正解数
   let currentQuestionNumber = 1; //今何問目
+  let selectedPrefId = null; // 場所モードで使用する変数
+  const maskImages = {};          // 当たり判定用に読み込む白シルエット画像（id -> Image）
+  let hitCanvas = null, hitCtx = null;
+  const imgCache = {};
 
-  window.addEventListener("DOMContentLoaded", () => {
+function preloadImages(urls, onProgress) {
+  let loaded = 0, total = urls.length;
+  return Promise.all(urls.map(url => new Promise((resolve, reject) => {
+    if (imgCache[url]?.complete) {
+      loaded++; onProgress?.(loaded, total); return resolve(imgCache[url]);
+    }
+    const img = new Image();            // 同一オリジン前提（Live Server / GitHub Pages）
+    img.onload = () => { loaded++; onProgress?.(loaded, total); resolve(img); };
+    img.onerror = reject;
+    img.src = url;
+    imgCache[url] = img;
+  })));
+}
+
+function showLoadingOverlay() {
+  const container = document.getElementById("game-container");
+  container.innerHTML = `
+    <div id="loading-overlay">
+      <div id="loading-text">画像を読みこんでいます… 0%</div>
+      <div id="loading-bar"><div></div></div>
+    </div>
+  `;
+}
+
+
+window.addEventListener("DOMContentLoaded", async () => {
+  // 1) ローディングUI
+  showLoadingOverlay();
+
+  // 2) プリロード対象（線画 + 白47 + 橙47）
+  const urls = [
+    "images/japan.png",
+    ...prefectures.map(p => `images/${p.id}-1.png`),
+    ...prefectures.map(p => `images/${p.id}-2.png`)
+  ];
+  const txt = () => document.getElementById("loading-text");
+  const bar = () => document.querySelector("#loading-bar > div");
+
+  try {
+    await preloadImages(urls, (loaded, total) => {
+      const pct = Math.floor(loaded / total * 100);
+      if (txt()) txt().textContent = `画像を読みこんでいます… ${pct}%`;
+      if (bar()) bar().style.width = `${pct}%`;
+    });
+
+    // マスク用キャッシュへ（白シルエット）
+    prefectures.forEach(p => { maskImages[p.id] = imgCache[`images/${p.id}-1.png`]; });
+
+    // 3) プリロード完了 → タイトルへ
     showTitleScreen();
-  });
+  } catch (e) {
+    if (txt()) txt().textContent = "読み込みに失敗しました。リロードしてください。";
+    console.error(e);
+  }
+});
 
   function showTitleScreen() {
     questionCount = 0;
@@ -384,6 +514,8 @@ const prefectures = [
     questionList = [];
     correctCount = 0;
     currentQuestionNumber = 1;
+    selectedPrefId = null;
+    hitCanvas = null, hitCtx = null;
     const container = document.getElementById("game-container");
 
     container.innerHTML = `
@@ -744,10 +876,138 @@ function checkTextAnswer() {
   `;
 }
 
-  function startMapGame() {
-    document.getElementById("game-container").innerHTML =
-      `<h2 style="text-align: center; padding-top: 40%;">地図モード（${questionCount}もん）スタート！</h2>`;
+function startMapGame() {
+  const container = document.getElementById("game-container");
+  const currentPref = questionList[0]; // 出題中の都道府県
+
+  const modeLabel = {
+    lower: "とどうふけん　なまえクイズ",
+    upper: "都道府県　名前クイズ",
+    map: "都道府県　場所クイズ"
+  };
+
+  // 初期選択をリセット
+  selectedPrefId = null;
+
+  container.innerHTML = `
+    <div id="mode-banner">${modeLabel[quizMode]}</div>
+    <button id="back-button" onclick="showTitleScreen()">もどる</button>
+
+    <!-- 問題文（上と同じ位置・スタイル） -->
+    <div id="question-text">
+      <div id="question-count">問題 ${currentQuestionNumber} / ${questionCount}</div>
+      <ruby>${currentPref.name}<rt>${currentPref.yomi}</rt></ruby> の<br>
+      ばしょは どこ？<br><br>
+      クリック または タップ で<br>せんたくしてね
+    </div>
+
+    <!-- 47枚の白シルエット（z-index: 2で地図線画の下） -->
+    <div id="silhouette-layer">
+      ${prefectures.map(p => `
+        <img
+          id="pref-img-${p.id}"
+          class="pref-sil"
+          src="images/${p.id}-1.png"
+          alt="${p.name}"
+          onclick="selectPref(${p.id})"
+        />
+      `).join("")}
+    </div>
+
+    <!-- 日本地図線画（最前面） -->
+    <img id="japan-map" src="images/japan.png" alt="日本地図" />
+
+    <!-- 右下の「ここ！」ボタン -->
+    <button id="confirm-button" onclick="checkMapAnswer()">ここ！</button>
+
+    <div id="next-button-area"></div>
+  `;
+    // 1) 白シルエット画像をキャッシュ
+  prefectures.forEach(p => {
+    if (!maskImages[p.id]) {
+      const img = new Image();
+      img.src = `images/${p.id}-1.png`;
+      maskImages[p.id] = img;
+    }
+  });
+
+  // 2) オフスクリーンCanvasを用意（線画画像サイズに合わせる）
+  const mapImg = document.getElementById("japan-map");
+  hitCanvas = document.createElement('canvas');
+  hitCtx = hitCanvas.getContext('2d');
+  // naturalWidth/Height は読み込み後に入る（未読込なら一旦 rect から推定してもOK）
+  const setCanvasSize = () => {
+    hitCanvas.width  = mapImg.naturalWidth  || mapImg.getBoundingClientRect().width;
+    hitCanvas.height = mapImg.naturalHeight || mapImg.getBoundingClientRect().height;
+  };
+  if (mapImg.complete) setCanvasSize(); else mapImg.onload = setCanvasSize;
+
+  // 3) クリックで座標→県IDを特定
+  container.addEventListener('click', onMapClick);
+}
+
+function onMapClick(e) {
+  const mapImg = document.getElementById("japan-map");
+  const rect = mapImg.getBoundingClientRect();
+
+  // 画像範囲外のクリックは無視
+  if (e.clientX < rect.left || e.clientX > rect.right ||
+      e.clientY < rect.top  || e.clientY > rect.bottom) return;
+
+  // 表示座標 -> 画像ピクセル座標に変換
+  const scaleX = (mapImg.naturalWidth  || rect.width)  / rect.width;
+  const scaleY = (mapImg.naturalHeight || rect.height) / rect.height;
+  const x = Math.floor((e.clientX - rect.left) * scaleX);
+  const y = Math.floor((e.clientY - rect.top)  * scaleY);
+
+  // すべての県の白シルエットで、クリック点のアルファをチェック
+  // ※白シルエットは透過背景なので、当たりは alpha>0 で判定できる
+  let hitId = null;
+  for (const p of prefectures) {
+    const img = maskImages[p.id];
+    if (!img || !hitCtx || !hitCanvas.width) continue;
+
+    // クリアして、その県の画像を原寸で描画
+    hitCtx.clearRect(0, 0, hitCanvas.width, hitCanvas.height);
+    hitCtx.drawImage(img, 0, 0, hitCanvas.width, hitCanvas.height);
+
+    const alpha = hitCtx.getImageData(x, y, 1, 1).data[3];
+    if (alpha > 0) { // 透明でない = その県の形の中
+      hitId = p.id;
+      break;
+    }
   }
+
+  if (hitId != null) {
+    selectPref(hitId); // いつもの選択処理（1枚だけオレンジ化）
+  }
+}
+
+// 県をタップしたとき：前の選択を白に戻し、今回タップをオレンジに
+function selectPref(id) {
+  console.log('tap:', id);
+  // 以前の選択があれば白に戻す
+  if (selectedPrefId !== null) {
+    const prev = document.getElementById(`pref-img-${selectedPrefId}`);
+    if (prev) prev.src = `images/${selectedPrefId}-1.png`;
+  }
+
+  // 新しい選択をオレンジに
+  const now = document.getElementById(`pref-img-${id}`);
+  if (now) {
+    now.src = `images/${id}-2.png`;
+    selectedPrefId = id;
+  }
+}
+
+// 正誤判定（UIは次のステップで作り込み。今は枠だけ用意）
+function checkMapAnswer() {
+  const correctId = questionList[0].id;
+  // ここで selectedPrefId と correctId を比較して判定UIへ。
+  // 次のステップで⭕❌表示や「つぎへ →」を実装しましょう！
+  console.log("選択:", selectedPrefId, "正解:", correctId);
+}
+
 </script>
 
 </body>
