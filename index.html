@@ -501,7 +501,10 @@ const prefectures = [
   let selectedPrefId = null; // 場所モードで使用する変数
   const maskImages = {};          // 当たり判定用に読み込む白シルエット画像（id -> Image）
   let hitMapCanvas = null, hitMapCtx = null;
+  let hitScaleX = 1, hitScaleY = 1;
   const imgCache = {};
+  let hitMapReady = false;
+  let mapSupported = true;
 
 function preloadImages(urls, onProgress) {
   let loaded = 0, total = urls.length;
@@ -527,48 +530,71 @@ function showLoadingOverlay() {
   `;
 }
 
-async function buildHitMap() {
-  // 地図と同じピクセルサイズ
-  const mapImg = imgCache["images/japan.png"]; // 事前プリロード済み想定
-  const w = mapImg.naturalWidth || mapImg.width;
-  const h = mapImg.naturalHeight || mapImg.height;
+// 最大幅(例: 1200px)でヒットマップを作る。縦横比は地図に合わせて自動調整。
+async function buildHitMap(maxWidth = 1200) {
+  const mapImg = imgCache["images/japan.png"]; // 事前プリロード済を想定
+  const natW = mapImg.naturalWidth || mapImg.width;
+  const natH = mapImg.naturalHeight || mapImg.height;
 
+  // 端末に優しい縮小サイズを計算
+  const targetW = Math.min(maxWidth, natW);
+  const targetH = Math.round(natH * (targetW / natW));
+
+  // 表示(=地図のnatural)からヒットマップ縮小座標へ変換する係数
+  hitScaleX = targetW / natW;
+  hitScaleY = targetH / natH;
+
+  // ヒットマップ本体
   hitMapCanvas = document.createElement('canvas');
-  hitMapCanvas.width = w;
-  hitMapCanvas.height = h;
+  hitMapCanvas.width = targetW;
+  hitMapCanvas.height = targetH;
   hitMapCtx = hitMapCanvas.getContext('2d');
 
-  // 作業用キャンバス（県ごとに色付けして転写）
+  // 作業用キャンバス
   const tmp = document.createElement('canvas');
-  tmp.width = w; tmp.height = h;
+  tmp.width = targetW;
+  tmp.height = targetH;
   const tctx = tmp.getContext('2d');
 
+  // ★ 超高速：合成モードで一発塗り
   for (const p of prefectures) {
-    tctx.clearRect(0, 0, w, h);
-    // 白シルエットを原寸で描画
+    tctx.clearRect(0, 0, targetW, targetH);
+
+    // 白シルエットを縮小描画
     const mask = imgCache[`images/${p.id}-1.png`];
-    tctx.drawImage(mask, 0, 0, w, h);
+    tctx.globalCompositeOperation = 'source-over';
+    tctx.drawImage(mask, 0, 0, targetW, targetH);
 
-    // 白(不透明)部分だけR=p.idに塗り替える
-    const imgData = tctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i+3] > 0) { // α>0 なら県の内部
-        d[i] = p.id;    // R に県IDを格納 (1..47)
-        d[i+1] = 0;
-        d[i+2] = 0;
-        d[i+3] = 255;   // 不透明
-      } else {
-        // 完全透明に（背景=0判定用）
-        d[i] = d[i+1] = d[i+2] = 0;
-        d[i+3] = 0;
-      }
-    }
-    tctx.putImageData(imgData, 0, 0);
+    // マスクの不透明部分にだけ県ID色を流し込む
+    tctx.globalCompositeOperation = 'source-in';
+    tctx.fillStyle = `rgb(${p.id},0,0)`; // R=県ID
+    tctx.fillRect(0, 0, targetW, targetH);
 
-    // 本体に重ね描き（県ごとに上書き）
+    // ヒットマップに合成
+    tctx.globalCompositeOperation = 'source-over';
     hitMapCtx.drawImage(tmp, 0, 0);
   }
+}
+
+async function tryBuildHitMapWithFallback() {
+  // 端末が重い場合に備えて、段階的に小さくして再試行
+  const candidates = [1000, 800, 600];
+  for (const w of candidates) {
+    try {
+      await buildHitMap(w);           // ← すでにある buildHitMap を使用
+      // taint/メモリ自己診断（1px 読めなければ例外）
+      hitMapCtx.getImageData(0, 0, 1, 1);
+      hitMapReady = true;
+      return true;
+    } catch (e) {
+      console.warn('buildHitMap failed at width', w, e);
+      // 次の幅で再挑戦
+    }
+  }
+  // すべて失敗 → 非対応として扱う
+  mapSupported = false;
+  hitMapReady = false;
+  return false;
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -595,7 +621,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     prefectures.forEach(p => { maskImages[p.id] = imgCache[`images/${p.id}-1.png`]; });
 
     if (txt()) txt().textContent = "地図の当たり判定を準備中…";
-    await buildHitMap();
+    await tryBuildHitMapWithFallback();
 
     // 3) プリロード完了 → タイトルへ
     showTitleScreen();
@@ -622,6 +648,16 @@ window.addEventListener("DOMContentLoaded", async () => {
         <button onclick="selectQuestionCount('map')"><ruby style="font-size: 20px; font-weight: bold; color: #e86c00;">全学年<rt style="font-size: 12px; color: #e86c00;">ぜんがくねん</rt></ruby>　<ruby style="font-size: 20px; font-weight: bold; color: #e86c00;">都道府県<rt style="font-size: 12px; color: #e86c00;">とどうふけん</rt></ruby>の<ruby style="font-size: 20px; font-weight: bold; color: #e86c00;">場所<rt style="font-size: 12px; color: #e86c00;">ばしょ</rt></ruby></button>
       </div>
     `;
+
+if (!mapSupported) {
+  const mapBtn = document.querySelector('.menu-buttons button:nth-child(3)');
+  if (mapBtn) {
+    mapBtn.disabled = true;
+    mapBtn.title = "このデバイスは場所クイズに対応していません";
+    mapBtn.style.opacity = '0.5';
+    mapBtn.style.cursor = 'not-allowed';
+  }
+}
   }
 
   function selectQuestionCount(mode) {
@@ -972,6 +1008,26 @@ function checkTextAnswer() {
 }
 
 function startMapGame() {
+
+if (!mapSupported || !hitMapReady) {
+   const container = document.getElementById("game-container");
+   container.innerHTML = `
+     <div id="mode-banner">都道府県　場所クイズ</div>
+     <button id="back-button" onclick="showTitleScreen()">もどる</button>
+     <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+       <div style="background:#fff; border:3px solid #e86c00; border-radius:16px; padding:24px; text-align:center; max-width:520px; box-shadow:0 6px 20px rgba(0,0,0,.15);">
+         <div style="font-weight:bold; font-size:24px; margin-bottom:8px;">このデバイスは<br>場所クイズモードに対応していません</div>
+         <div style="font-size:16px; color:#555;">（メモリやブラウザ機能の制限が原因です）</div>
+         <button id="back-to-title" onclick="showTitleScreen()" style="margin-top:16px; padding:10px 18px; border:none; border-radius:8px; background:#e86c00; color:#fff; font-weight:bold; cursor:pointer;">タイトルにもどる</button>
+       </div>
+     </div>
+   `;
+   return;
+}
+  if (!hitMapReady) {
+    alert("地図の準備をしています。数秒後にもう一度お試しください。");
+    return;
+  }
   const container = document.getElementById("game-container");
   const currentPref = questionList[0]; // 出題中の都道府県
 
@@ -1032,28 +1088,37 @@ function onMapClick(e) {
   const rect = mapImg.getBoundingClientRect();
   if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
 
-  const scaleX = (mapImg.naturalWidth || rect.width) / rect.width;
-  const scaleY = (mapImg.naturalHeight || rect.height) / rect.height;
-  const x = Math.floor((e.clientX - rect.left) * scaleX);
-  const y = Math.floor((e.clientY - rect.top)  * scaleY);
+  // 画面 → natural座標
+  const natX = (mapImg.naturalWidth  || rect.width)  * ((e.clientX - rect.left) / rect.width);
+  const natY = (mapImg.naturalHeight || rect.height) * ((e.clientY - rect.top)  / rect.height);
+
+  // natural → 縮小ヒットマップ座標
+  let hx = Math.floor(natX * hitScaleX);
+  let hy = Math.floor(natY * hitScaleY);
+
+  if (!hitMapCtx || !hitMapCanvas) return;
+  // はみ出し防止（NaN/負/大きすぎ を防ぐ）
+  hx = Math.max(0, Math.min(hx, hitMapCanvas.width  - 1));
+  hy = Math.max(0, Math.min(hy, hitMapCanvas.height - 1));
 
   if (!hitMapCtx) return;
-  const pixel = hitMapCtx.getImageData(x, y, 1, 1).data;
-  const id = pixel[0]; // ← R に県IDが入ってる
+  const id = hitMapCtx.getImageData(hx, hy, 1, 1).data[0];
+
+  console.log({hx, hy, id, hitScaleX, hitScaleY}); //デバッグ
+
   if (id > 0) {
     selectPref(id);
   } else {
-    // 近傍を少し探す（タップゆらぎ救済：半径3〜5px）
-    const near = findNearId(x, y, 4); // 半径4の近傍探索
+    const near = findNearId(hx, hy, 5); // ちょい広めに
     if (near) selectPref(near);
   }
 }
 
-function findNearId(x, y, r=4) {
+function findNearId(hx, hy, r=5) {
   if (!hitMapCtx) return null;
   for (let dy=-r; dy<=r; dy++) {
     for (let dx=-r; dx<=r; dx++) {
-      const a = hitMapCtx.getImageData(x+dx, y+dy, 1, 1).data[0];
+      const a = hitMapCtx.getImageData(hx+dx, hy+dy, 1, 1).data[0];
       if (a > 0) return a;
     }
   }
